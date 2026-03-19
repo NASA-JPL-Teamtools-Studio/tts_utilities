@@ -1,0 +1,43 @@
+[project]
+name = "tts-utilities"
+description = "A starter repo to help users quickly set up a Teamtools Studio project with common structure, configs, and package scaffolding."
+readme = "README.md"
+requires-python = ">=3.6"
+license = {text = "Unlicense"}
+authors = [
+  { name = "shanemb", email = "shane.m.bonkowski@jpl.nasa.gov" },
+  { name = "muszynsk", email = "matt.muszynski@jpl.nasa.gov" },
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: Unlicense",
+]
+dependencies = [
+  "pytest", 
+  "tomli", 
+  "datetime",
+  "rich",
+  "ipynbname",
+  "toml",
+  "setuptools_scm"
+]
+dynamic = ["version"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools_scm]
+version_scheme = "guess-next-dev"
+local_scheme = "no-local-version"
+
+[build-system]
+requires = [
+    "setuptools", 
+    "setuptools_scm",
+    "toml", 
+    "wheel", 
+    ]
+build-backend = "setuptools.build_meta"

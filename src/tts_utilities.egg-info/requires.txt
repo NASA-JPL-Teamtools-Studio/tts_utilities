@@ -1,0 +1,7 @@
+pytest
+tomli
+datetime
+rich
+ipynbname
+toml
+setuptools_scm

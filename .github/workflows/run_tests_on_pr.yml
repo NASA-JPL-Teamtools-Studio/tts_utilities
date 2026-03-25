@@ -9,50 +9,47 @@ permissions:
   contents: read
 
 jobs:
-  # This part runs the actual "rooms" in parallel
   test:
-    runs-on: ubuntu-latest
+    name: Py ${{ matrix.python-version }}
+    # Routes 3.6 and 3.7 to the older runner; everything else to latest
+    runs-on: ${{ (matrix.python-version == '3.6.8' || matrix.python-version == '3.7') && 'ubuntu-20.04' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.6.8", "3.14"]
-    outputs:
-      # We save the result of each matrix job to use in the summary
-      outcome-368: ${{ steps.set_status.outputs.status_368 }}
-      outcome-314: ${{ steps.set_status.outputs.status_314 }}
-    
+        python-version: ["3.6.8", "3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install and Test
-        id: run_tests
+      - name: Install Package and Reporting Tools
         run: |
           python -m pip install --upgrade pip
-          pip install .
-          pytest
+          # Installs the local package + testing tools
+          pip install . pytest pytest-html
 
-  # This job waits for the matrix to finish and posts ONE comment
-  report-results:
-    needs: test
-    if: always() # Runs even if tests failed
-    runs-on: ubuntu-latest
-    steps:
-      - name: Post Combined Comment
+      - name: Run Tests with HTML Report
+        id: run_tests
+        run: |
+          pytest --html=report-${{ matrix.python-version }}.html --self-contained-html
+
+      - name: Upload HTML Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-py${{ matrix.python-version }}
+          path: report-${{ matrix.python-version }}.html
+
+      - name: Post Results to PR
+        if: always()
         uses: mshick/add-pr-comment@v2
         with:
           message: |
-            ### 🛠️ Integration Test Results
-            | Python Version | Status |
-            | :--- | :--- |
-            | **3.6.8** | ${{ needs.test.result == 'success' && '✅ Passed' || '❌ Failed' }} |
-            | **3.14** | ${{ needs.test.result == 'success' && '✅ Passed' || '❌ Failed' }} |
-            
-            **Evidence:** [View Detailed Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            ### 🧪 Test Results: Python ${{ matrix.python-version }}
+            - **Status:** ${{ steps.run_tests.outcome == 'success' && '✅ Passed' || '❌ Failed' }}
+            - **Report:** [Download HTML Evidence](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})

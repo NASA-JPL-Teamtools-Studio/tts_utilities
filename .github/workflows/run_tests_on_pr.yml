@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Full coverage from 2018 legacy to 2026 future-proof
+        # Full range from legacy to the 2026 cutting edge
         python-version: ["3.6.8", "3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     
     container:
@@ -25,33 +25,33 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Critical for setuptools-scm to see tags
+          # Required for setuptools-scm to find Git tags/history
+          fetch-depth: 0
 
-      - name: Install Git and Fix Safe Directory
-        run: |
-          apt-get update && apt-get install -y git
-          git config --global --add safe.directory /__w/tts_utilities/tts_utilities
+      - name: Fix Git Safe Directory
+        # Required because the container user (root) differs from the runner user
+        run: git config --global --add safe.directory /__w/tts_utilities/tts_utilities
+
 
       - name: Install Dependencies
         run: |
-          # 1. Handle Legacy Python (3.6 and 3.7)
+          # Upgrade pip to a version compatible with the specific Python room
           if [[ "${{ matrix.python-version }}" == "3.6.8" || "${{ matrix.python-version }}" == "3.7" ]]; then
             python -m pip install "pip<22.0" "setuptools<60.0"
             pip install "pytest<7.0" "pytest-html<3.0" "setuptools-scm<7.0"
-          
-          # 2. Handle Modern Python (3.8 through 3.14)
           else
             python -m pip install --upgrade pip
             pip install pytest pytest-html setuptools-scm
           fi
           
-          # 3. Install the local package
+          # Install the local library
           pip install .
 
       - name: Run Tests
         id: run_tests
         run: |
-          # Generate a self-contained HTML report unique to this version
+          # Generate a self-contained HTML report for this specific version
+
           pytest --html=report-${{ matrix.python-version }}.html --self-contained-html
 
       - name: Upload HTML Report
@@ -61,6 +61,7 @@ jobs:
           name: test-report-py${{ matrix.python-version }}
           path: report-${{ matrix.python-version }}.html
 
+
       - name: Post Status Comment
         if: always()
         uses: mshick/add-pr-comment@v2
@@ -68,5 +69,5 @@ jobs:
           message: |
             ### 🧪 Test Results: Python ${{ matrix.python-version }}
             - **Status:** ${{ steps.run_tests.outcome == 'success' && '✅ Passed' || '❌ Failed' }}
-            - **Evidence:** Download `test-report-py${{ matrix.python-version }}` from the **Summary** tab.
+            - **Evidence:** Download `test-report-py${{ matrix.python-version }}` from the **Summary > Artifacts** section.
             - [View Workflow Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})

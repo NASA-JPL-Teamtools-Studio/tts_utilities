@@ -1,0 +1,58 @@
+name: PR Multi-Version Tests
+
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  # This part runs the actual "rooms" in parallel
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.6.8", "3.14"]
+    outputs:
+      # We save the result of each matrix job to use in the summary
+      outcome-368: ${{ steps.set_status.outputs.status_368 }}
+      outcome-314: ${{ steps.set_status.outputs.status_314 }}
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install and Test
+        id: run_tests
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+          pytest
+
+  # This job waits for the matrix to finish and posts ONE comment
+  report-results:
+    needs: test
+    if: always() # Runs even if tests failed
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post Combined Comment
+        uses: mshick/add-pr-comment@v2
+        with:
+          message: |
+            ### 🛠️ Integration Test Results
+            | Python Version | Status |
+            | :--- | :--- |
+            | **3.6.8** | ${{ needs.test.result == 'success' && '✅ Passed' || '❌ Failed' }} |
+            | **3.14** | ${{ needs.test.result == 'success' && '✅ Passed' || '❌ Failed' }} |
+            
+            **Evidence:** [View Detailed Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})

@@ -32,6 +32,7 @@ jobs:
         # Required because the container user (root) differs from the runner user
         run: git config --global --add safe.directory /__w/tts_utilities/tts_utilities
 
+
       - name: Install Dependencies
         run: |
           # Upgrade pip to a version compatible with the specific Python room
@@ -50,6 +51,7 @@ jobs:
         id: run_tests
         run: |
           # Generate a self-contained HTML report for this specific version
+
           pytest --html=report-${{ matrix.python-version }}.html --self-contained-html
 
       - name: Upload HTML Report
@@ -58,6 +60,7 @@ jobs:
         with:
           name: test-report-py${{ matrix.python-version }}
           path: report-${{ matrix.python-version }}.html
+
 
       - name: Post Status Comment
         if: always()

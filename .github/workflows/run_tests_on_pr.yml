@@ -11,47 +11,31 @@ permissions:
 jobs:
   test:
     name: Py ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    # Routes 3.6 and 3.7 to the older runner; everything else to latest
+    runs-on: ${{ (matrix.python-version == '3.6.8' || matrix.python-version == '3.7') && 'ubuntu-20.04' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
-        # Full coverage from 2018 legacy to 2026 future-proof
         python-version: ["3.6.8", "3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
-    
-    container:
-      image: python:${{ matrix.python-version }}-slim
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
         with:
-          fetch-depth: 0 # Critical for setuptools-scm to see tags
+          python-version: ${{ matrix.python-version }}
 
-      - name: Install Git and Fix Safe Directory
+      - name: Install Package and Reporting Tools
         run: |
-          apt-get update && apt-get install -y git
-          git config --global --add safe.directory /__w/tts_utilities/tts_utilities
+          python -m pip install --upgrade pip
+          # Installs the local package + testing tools
+          pip install . pytest pytest-html
 
-      - name: Install Dependencies
-        run: |
-          # 1. Handle Legacy Python (3.6 and 3.7)
-          if [[ "${{ matrix.python-version }}" == "3.6.8" || "${{ matrix.python-version }}" == "3.7" ]]; then
-            python -m pip install "pip<22.0" "setuptools<60.0"
-            pip install "pytest<7.0" "pytest-html<3.0" "setuptools-scm<7.0"
-          
-          # 2. Handle Modern Python (3.8 through 3.14)
-          else
-            python -m pip install --upgrade pip
-            pip install pytest pytest-html setuptools-scm
-          fi
-          
-          # 3. Install the local package
-          pip install .
-
-      - name: Run Tests
+      - name: Run Tests with HTML Report
         id: run_tests
         run: |
-          # Generate a self-contained HTML report unique to this version
           pytest --html=report-${{ matrix.python-version }}.html --self-contained-html
 
       - name: Upload HTML Report
@@ -61,12 +45,11 @@ jobs:
           name: test-report-py${{ matrix.python-version }}
           path: report-${{ matrix.python-version }}.html
 
-      - name: Post Status Comment
+      - name: Post Results to PR
         if: always()
         uses: mshick/add-pr-comment@v2
         with:
           message: |
             ### 🧪 Test Results: Python ${{ matrix.python-version }}
             - **Status:** ${{ steps.run_tests.outcome == 'success' && '✅ Passed' || '❌ Failed' }}
-            - **Evidence:** Download `test-report-py${{ matrix.python-version }}` from the **Summary** tab.
-            - [View Workflow Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            - **Report:** [Download HTML Evidence](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})

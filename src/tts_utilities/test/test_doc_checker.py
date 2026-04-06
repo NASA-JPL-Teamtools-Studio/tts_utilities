@@ -22,6 +22,7 @@ class TestDocChecker:
         tree = ast.parse(code)
         checker.visit(tree)
 
+    @pytest.mark.ai
     def test_visit_class_def_documented(self, checker):
         code = """
 class MyClass:
@@ -33,6 +34,7 @@ class MyClass:
         assert checker.stats["documented_items"] == 1
         assert len(checker.stats["issues"]) == 0
 
+    @pytest.mark.ai
     def test_visit_class_def_undocumented(self, checker):
         code = """
 class MyClass:
@@ -49,6 +51,7 @@ class MyClass:
         assert issue["type"] == "Missing Class Doc"
         assert issue["name"] == "MyClass"
 
+    @pytest.mark.ai
     def test_visit_function_def_documented(self, checker):
         code = """
 def my_func(a, b):
@@ -61,6 +64,7 @@ def my_func(a, b):
         assert checker.stats["documented_items"] == 3
         assert len(checker.stats["issues"]) == 0
 
+    @pytest.mark.ai
     def test_visit_function_def_missing_arg_docs(self, checker):
         # FIX: Renamed variable 'b' to 'arg_b' so it doesn't accidentally 
         # match the word "but" in the docstring substring check.
@@ -79,6 +83,7 @@ def my_func(a, arg_b):
         assert checker.stats["issues"][0]["type"] == "Missing Arg Doc"
         assert checker.stats["issues"][0]["name"] == "arg_b"
 
+    @pytest.mark.ai
     def test_async_function_support(self, checker):
         code = """
 async def my_async_func():
@@ -89,6 +94,7 @@ async def my_async_func():
         assert checker.stats["documented_items"] == 1
         assert checker.stats["total_items"] == 1
 
+    @pytest.mark.ai
     def test_init_fallback_to_class_doc(self, checker):
         code = """
 class MyClass:
@@ -104,6 +110,7 @@ class MyClass:
         assert checker.stats["documented_items"] == 2
         assert len(checker.stats["issues"]) == 0
 
+    @pytest.mark.ai
     def test_property_and_setter_handling(self, checker):
         code = """
 class MyData:
@@ -131,6 +138,7 @@ class MyData:
         assert len(checker.stats["issues"]) == 1
         assert checker.stats["issues"][0]["type"] == "Missing Class Doc"
 
+    @pytest.mark.ai
     def test_ignore_self_and_cls_args(self, checker):
         code = """
 class MyClass:
@@ -159,7 +167,8 @@ class TestRunCheck:
     @patch("os.walk")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open, read_data="def foo():\n    '''Docs.'''\n    pass")
-    def test_run_check_integration(self, mock_file, mock_exists, mock_walk, mock_stdout):
+
+    @pytest.mark.ai    def test_run_check_integration(self, mock_file, mock_exists, mock_walk, mock_stdout):
         # Setup
         mock_exists.return_value = True
         # Simulate directory structure: root, dirs, files
@@ -182,7 +191,8 @@ class TestRunCheck:
 
     @patch("sys.stdout", new_callable=StringIO)
     @patch("os.path.exists")
-    def test_run_check_invalid_dir(self, mock_exists, mock_stdout):
+
+    @pytest.mark.ai    def test_run_check_invalid_dir(self, mock_exists, mock_stdout):
         mock_exists.return_value = False
         run_check("/bad/path")
         

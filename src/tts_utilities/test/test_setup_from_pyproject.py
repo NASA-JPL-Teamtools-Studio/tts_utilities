@@ -37,6 +37,7 @@ def mock_pyproject_data():
 @patch("tts_utilities.setup_from_pyproject.toml.load")
 @patch("tts_utilities.setup_from_pyproject.setuptools_scm.get_version")
 @patch("tts_utilities.setup_from_pyproject.find_packages")
+@pytest.mark.ai
 def test_setup_from_pyproject_mapping(
     mock_find_packages, 
     mock_scm, 
@@ -83,6 +84,7 @@ def test_setup_from_pyproject_mapping(
 @patch("tts_utilities.setup_from_pyproject.setup")
 @patch("tts_utilities.setup_from_pyproject.toml.load")
 @patch("tts_utilities.setup_from_pyproject.setuptools_scm.get_version")
+@pytest.mark.ai
 def test_setup_from_pyproject_defaults(mock_scm, mock_toml_load, mock_setup):
     """Verifies that the function handles missing optional TOML keys gracefully."""
     

@@ -9,6 +9,7 @@ from tts_utilities.test_utilities import safe_test_paths
 # Replace 'your_module' with the actual filename where safe_test_paths resides
 # from your_module import safe_test_paths
 
+@pytest.mark.ai
 def test_safe_test_paths_writable(tmp_path):
     """
     Scenario: The directory exists and is writable.
@@ -27,6 +28,7 @@ def test_safe_test_paths_writable(tmp_path):
         assert output_path == full_path
         assert input_path == output_path
 
+@pytest.mark.ai
 def test_safe_test_paths_not_writable():
     """
     Scenario: The directory exists but is NOT writable (simulating site-packages).
@@ -55,6 +57,7 @@ def test_safe_test_paths_not_writable():
         assert str(output_path).startswith(safe_mock_temp)
         assert output_path.name == "my_tests"
 
+@pytest.mark.ai
 def test_safe_test_paths_not_exists():
     """
     Scenario: The directory does not exist at all.
@@ -78,6 +81,7 @@ def test_safe_test_paths_not_exists():
         # Check if the folder name is in the output path string
         assert "tts_test_missing" in str(output_path)
 
+@pytest.mark.ai
 def test_string_input_handling(tmp_path):
     """
     Verifies that the function correctly handles string inputs by converting them to Paths.

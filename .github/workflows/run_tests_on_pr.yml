@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Full coverage from 2018 legacy to 2026 future-proof
+        # 3.6.8 and 3.7 require specific handling for legacy pip/setuptools
         python-version: ["3.6.8", "3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     
     container:
@@ -25,33 +25,48 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Critical for setuptools-scm to see tags
+          fetch-depth: 0
 
-      - name: Install Git and Fix Safe Directory
+      - name: Fix EOL Repos and Install Git
         run: |
-          apt-get update && apt-get install -y git
-          git config --global --add safe.directory /__w/tts_utilities/tts_utilities
+          # If the image is old (3.6/3.7), we may need to point to archive.debian.org
+          if [ -f /etc/apt/sources.list ]; then
+            sed -i 's/deb.debian.org/archive.debian.org/g' /etc/apt/sources.list
+            sed -i 's|security.debian.org/debian-security|archive.debian.org/debian-security|g' /etc/apt/sources.list
+            sed -i '/stretch-updates/d' /etc/apt/sources.list
+          fi
+          apt-get update || true
+          apt-get install -y git
+          # Use the GITHUB_WORKSPACE environment variable instead of hardcoding paths
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Install Dependencies
+        shell: bash
         run: |
-          # 1. Handle Legacy Python (3.6 and 3.7)
-          if [[ "${{ matrix.python-version }}" == "3.6.8" || "${{ matrix.python-version }}" == "3.7" ]]; then
-            python -m pip install "pip<22.0" "setuptools<60.0"
+          VERSION="${{ matrix.python-version }}"
+          
+          if [[ "$VERSION" == "3.6.8" ]]; then
+            # Python 3.6: Last supported pip is 20.3.4, setuptools 59.6.0
+            python -m pip install --upgrade "pip<21.0" "setuptools<60.0" "wheel"
             pip install "pytest<7.0" "pytest-html<3.0" "setuptools-scm<7.0"
           
-          # 2. Handle Modern Python (3.8 through 3.14)
+          elif [[ "$VERSION" == "3.7" ]]; then
+            # Python 3.7: Last supported pip is 23.0.1
+            python -m pip install --upgrade "pip<23.1" "setuptools<60.0" "wheel"
+            pip install "pytest<8.0" "pytest-html<4.0" "setuptools-scm<8.0"
+          
           else
-            python -m pip install --upgrade pip
+            # Modern Python
+            python -m pip install --upgrade pip setuptools wheel
             pip install pytest pytest-html setuptools-scm
           fi
           
-          # 3. Install the local package
+          # Install the local package
           pip install .
 
       - name: Run Tests
         id: run_tests
         run: |
-          # Generate a self-contained HTML report unique to this version
           pytest --html=report-${{ matrix.python-version }}.html --self-contained-html
 
       - name: Upload HTML Report

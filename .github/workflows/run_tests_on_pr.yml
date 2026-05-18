@@ -15,78 +15,69 @@ permissions:
 
 jobs:
   test:
-    name: Py ${{ matrix.python-version }} (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Py ${{ matrix.python-version }}
+    runs-on: ubuntu-latest # Everything runs on the latest, no more infinite queues
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Legacy versions pinned to older Ubuntu
-          - python-version: "3.6"
-            os: ubuntu-20.04
-          - python-version: "3.7"
-            os: ubuntu-20.04
-          # Modern versions using latest Ubuntu
-          - python-version: "3.8"
-            os: ubuntu-latest
-          - python-version: "3.9"
-            os: ubuntu-latest
-          - python-version: "3.10"
-            os: ubuntu-latest
-          - python-version: "3.11"
-            os: ubuntu-latest
-          - python-version: "3.12"
-            os: ubuntu-latest
-          - python-version: "3.13"
-            os: ubuntu-latest
-          - python-version: "3.14"
-            os: ubuntu-latest
+        python-version: ["3.6", "3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     
+    env:
+      # Global fix for setuptools-scm metadata errors
+      SETUPTOOLS_SCM_PRETEND_VERSION: "1.0.0.dev0"
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup Python ${{ matrix.python-version }}
+      # ---- 1. MODERN PYTHON HANDLING (3.8 to 3.14) ----
+      - name: Setup Modern Python
+        if: matrix.python-version != '3.6' && matrix.python-version != '3.7'
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: true
 
-      - name: Fix Git Safe Directory
+      - name: Test Modern Python
+        if: matrix.python-version != '3.6' && matrix.python-version != '3.7'
         run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - name: Install Dependencies
-        shell: bash
-        run: |
-          VERSION="${{ matrix.python-version }}"
-          
-          # Handle dependency limits for EOL versions
-          if [[ "$VERSION" == "3.6"* ]]; then
-            python -m pip install --upgrade "pip<21.0" "setuptools<60.0" "wheel"
-            pip install "pytest<7.0" "pytest-html<3.0" "setuptools-scm<7.0"
-          elif [[ "$VERSION" == "3.7"* ]]; then
-            python -m pip install --upgrade "pip<23.1" "setuptools<60.0" "wheel"
-            pip install "pytest<8.0" "pytest-html<4.0" "setuptools-scm<8.0"
-          else
-            python -m pip install --upgrade pip setuptools wheel
-            pip install pytest pytest-html setuptools-scm
-          fi
-          
-          # Provide dummy version for 3.14 alpha issues with setuptools-scm
-          if [[ "$VERSION" == "3.14"* ]]; then
-             export SETUPTOOLS_SCM_PRETEND_VERSION="0.0.1.dev0"
-          fi
-          
+          python -m pip install --upgrade pip setuptools wheel
+          pip install pytest pytest-html setuptools-scm
           pip install .
-
-      - name: Run Tests
-        id: run_tests
-        run: |
           pytest --html=report-${{ matrix.python-version }}.html --self-contained-html
 
+      # ---- 2. LEGACY PYTHON HANDLING (3.6 and 3.7) ----
+      # We run this explicitly via Docker so the older glibc/SSL versions
+      # don't conflict with GitHub's modern Node 20 runner requirements.
+      - name: Test Legacy Python in Docker
+        if: matrix.python-version == '3.6' || matrix.python-version == '3.7'
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/app" \
+            -w /app \
+            -e SETUPTOOLS_SCM_PRETEND_VERSION="1.0.0.dev0" \
+            python:${{ matrix.python-version }}-slim \
+            bash -c "
+              apt-get update && apt-get install -y git && \
+              git config --global --add safe.directory /app && \
+              if [ '${{ matrix.python-version }}' = '3.6' ]; then
+                pip install --upgrade 'pip<21.0' 'setuptools<60.0' wheel && \
+                pip install 'pytest<7.0' 'pytest-html<3.0' 'setuptools-scm<7.0';
+              else
+                pip install --upgrade 'pip<23.1' 'setuptools<60.0' wheel && \
+                pip install 'pytest<8.0' 'pytest-html<4.0' 'setuptools-scm<8.0';
+              fi && \
+              pip install . && \
+              pytest --html=report-${{ matrix.python-version }}.html --self-contained-html
+            "
+          
+          # Docker writes the HTML report as root. We must chown it back to the runner user
+          # otherwise the upload-artifact step will fail with permission denied.
+          sudo chown -R $USER:$USER "$GITHUB_WORKSPACE"
+
+      # ---- 3. UPLOAD & REPORT ----
       - name: Upload HTML Report
         if: always()
         uses: actions/upload-artifact@v4
@@ -100,6 +91,6 @@ jobs:
         with:
           message: |
             ### 🧪 Test Results: Python ${{ matrix.python-version }}
-            - **Status:** ${{ steps.run_tests.outcome == 'success' && '✅ Passed' || '❌ Failed' }}
+            - **Status:** ${{ job.status == 'success' && '✅ Passed' || '❌ Failed' }}
             - **Evidence:** Download `test-report-py${{ matrix.python-version }}` from the **Summary** tab.
             - [View Workflow Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})

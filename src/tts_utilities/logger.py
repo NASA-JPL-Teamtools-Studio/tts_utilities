@@ -9,51 +9,75 @@ from rich.console import Console
 
 UTC_FMT_TRUNCATED = "%Y-%jT%H:%M:%S"
 
-DEFAULT_LOGGING_FORMATTER = logging.Formatter(
-    "%(asctime)s (%(levelname)s) %(name)s.%(funcName)s: %(message)s",
-    datefmt=UTC_FMT_TRUNCATED,
-)
-
-# Handlers registered here are broadcast to every logger created via
-# `create_logger`, in addition to whatever logger they were originally
-# attached to. This lets a single handler (e.g. a run-specific log file)
-# capture output from all the independent per-module loggers that
-# `create_logger` creates, since those loggers do not propagate to a
-# common parent by default.
-_shared_handlers = []
+_MANAGED_LOGGERS: dict = {}
+_SHARED_HANDLERS: list = []
 
 
 def register_shared_handler(handler: logging.Handler) -> None:
     """
-    Registers a handler to be shared across all loggers created via
-    `create_logger`, and immediately attaches it to every logger that
-    already exists.
+    Register a handler to be added to all loggers managed by create_logger.
 
-    :param handler: The handler to share (e.g. a `logging.FileHandler`).
-    :type handler: logging.Handler
+    Adds the handler immediately to all currently managed loggers and to any
+    future loggers created by create_logger.
+
+    This mechanism was introduced to solve a problem in ``tts_tower``: Tower's
+    ``log_to_file`` function attaches a file handler to the ``'tower'`` logger
+    hierarchy, but most modules use ``create_logger`` from this library, which
+    produces isolated loggers (``propagate=False``) outside that hierarchy.
+    Without this registry, those loggers' output would never reach the log
+    file. ``log_to_file`` now calls this function so the file handler is
+    pushed to every ``create_logger``-managed logger automatically, both
+    retroactively and for any loggers created afterward.
+
+    This is not Tower-specific and may be useful for any downstream library
+    that needs to inject a handler into all managed loggers at runtime. For
+    example, ``tts_dexter`` could call ``register_shared_handler`` at the start
+    of a procedure run, passing a ``FileHandler`` pointed at a per-procedure
+    log file. Every module that participates in that run (data utils, input
+    clients, dispositioners, etc.) would then automatically write to that file
+    without any of them needing to know the log path.
+
+    Parameters
+    ----------
+    handler:
+        The handler instance to share across all managed loggers.
     """
-    if handler not in _shared_handlers:
-        _shared_handlers.append(handler)
-
-    for existing_logger in logging.Logger.manager.loggerDict.values():
-        if isinstance(existing_logger, logging.Logger) and handler not in existing_logger.handlers:
-            existing_logger.addHandler(handler)
+    if handler not in _SHARED_HANDLERS:
+        _SHARED_HANDLERS.append(handler)
+    for logger in _MANAGED_LOGGERS.values():
+        if handler not in logger.handlers:
+            logger.addHandler(handler)
 
 
 def unregister_shared_handlers_by_type(handler_type: type) -> None:
     """
-    Removes any previously-registered shared handlers of the given type,
-    detaching them from every logger they were attached to.
+    Remove all shared handlers of the given type from the registry and all
+    managed loggers.
 
-    :param handler_type: The class of handler to remove (e.g. `logging.FileHandler`).
-    :type handler_type: type
+    This is the counterpart to ``register_shared_handler`` and is intended to
+    be called before registering a replacement handler of the same type — for
+    example, when ``tts_tower``'s ``log_to_file`` is invoked a second time to
+    redirect output to a new file. Calling this first ensures the old
+    ``FileHandler`` is cleanly removed from every managed logger before the
+    new one is registered, preventing duplicate or stale file handles.
+
+    Parameters
+    ----------
+    handler_type:
+        The handler class to remove (e.g., ``logging.FileHandler``).
     """
-    handlers_to_remove = [h for h in _shared_handlers if isinstance(h, handler_type)]
-    for handler in handlers_to_remove:
-        _shared_handlers.remove(handler)
-        for existing_logger in logging.Logger.manager.loggerDict.values():
-            if isinstance(existing_logger, logging.Logger) and handler in existing_logger.handlers:
-                existing_logger.removeHandler(handler)
+    to_remove = [h for h in _SHARED_HANDLERS if isinstance(h, handler_type)]
+    for h in to_remove:
+        _SHARED_HANDLERS.remove(h)
+    for logger in _MANAGED_LOGGERS.values():
+        for h in [x for x in logger.handlers if isinstance(x, handler_type)]:
+            logger.removeHandler(h)
+
+
+DEFAULT_LOGGING_FORMATTER = logging.Formatter(
+    "%(asctime)s (%(levelname)s) %(name)s.%(funcName)s: %(message)s",
+    datefmt=UTC_FMT_TRUNCATED,
+)
 
 
 def create_logger(
@@ -143,14 +167,13 @@ def create_logger(
         file_handler.setLevel(file_level)
         logger.addHandler(file_handler)
 
-    # Attach any handlers previously registered via `register_shared_handler`
-    # so this logger's output is also captured by them (e.g. a shared log file).
-    for shared_handler in _shared_handlers:
-        if shared_handler not in logger.handlers:
-            logger.addHandler(shared_handler)
-
     # Final logger setup settings
     logger.setLevel(min(stream_level, file_level))
     logger.propagate = propagate
 
+    for handler in _SHARED_HANDLERS:
+        if handler not in logger.handlers:
+            logger.addHandler(handler)
+
+    _MANAGED_LOGGERS[name] = logger
     return logger

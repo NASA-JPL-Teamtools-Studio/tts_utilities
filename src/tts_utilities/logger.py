@@ -14,6 +14,47 @@ DEFAULT_LOGGING_FORMATTER = logging.Formatter(
     datefmt=UTC_FMT_TRUNCATED,
 )
 
+# Handlers registered here are broadcast to every logger created via
+# `create_logger`, in addition to whatever logger they were originally
+# attached to. This lets a single handler (e.g. a run-specific log file)
+# capture output from all the independent per-module loggers that
+# `create_logger` creates, since those loggers do not propagate to a
+# common parent by default.
+_shared_handlers = []
+
+
+def register_shared_handler(handler: logging.Handler) -> None:
+    """
+    Registers a handler to be shared across all loggers created via
+    `create_logger`, and immediately attaches it to every logger that
+    already exists.
+
+    :param handler: The handler to share (e.g. a `logging.FileHandler`).
+    :type handler: logging.Handler
+    """
+    if handler not in _shared_handlers:
+        _shared_handlers.append(handler)
+
+    for existing_logger in logging.Logger.manager.loggerDict.values():
+        if isinstance(existing_logger, logging.Logger) and handler not in existing_logger.handlers:
+            existing_logger.addHandler(handler)
+
+
+def unregister_shared_handlers_by_type(handler_type: type) -> None:
+    """
+    Removes any previously-registered shared handlers of the given type,
+    detaching them from every logger they were attached to.
+
+    :param handler_type: The class of handler to remove (e.g. `logging.FileHandler`).
+    :type handler_type: type
+    """
+    handlers_to_remove = [h for h in _shared_handlers if isinstance(h, handler_type)]
+    for handler in handlers_to_remove:
+        _shared_handlers.remove(handler)
+        for existing_logger in logging.Logger.manager.loggerDict.values():
+            if isinstance(existing_logger, logging.Logger) and handler in existing_logger.handlers:
+                existing_logger.removeHandler(handler)
+
 
 def create_logger(
     name: str,
@@ -101,6 +142,12 @@ def create_logger(
         file_handler.setFormatter(formatter)
         file_handler.setLevel(file_level)
         logger.addHandler(file_handler)
+
+    # Attach any handlers previously registered via `register_shared_handler`
+    # so this logger's output is also captured by them (e.g. a shared log file).
+    for shared_handler in _shared_handlers:
+        if shared_handler not in logger.handlers:
+            logger.addHandler(shared_handler)
 
     # Final logger setup settings
     logger.setLevel(min(stream_level, file_level))

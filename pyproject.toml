@@ -19,7 +19,8 @@ dependencies = [
   "rich",
   "ipynbname",
   "toml",
-  "setuptools_scm"
+  "setuptools_scm",
+  "jupyterlab"
 ]
 dynamic = ["version"]
 

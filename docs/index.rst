@@ -9,6 +9,7 @@ Welcome to the Teamtools Starter Template documentation!
    util
    setup_from_pyproject
    test_utilities
+   inspection
 
 Indices and tables
 ==================

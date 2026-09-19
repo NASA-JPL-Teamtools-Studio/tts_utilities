@@ -12,6 +12,18 @@ from automated tests, CI, or agent tooling.
 Normalization removes run-to-run nondeterminism before hashing (embedded
 UUIDs, document timestamps) so only real content changes invalidate a
 certification.
+
+OOXML volatile-member policy
+----------------------------
+Office documents (``docx``, ``xlsx``, ``pptx``) are hashed by canonical
+member content rather than by raw bytes: members are serialized in
+sorted order so zip member ordering and archive timestamps cannot affect
+the digest. Members are matched by basename. ``core.xml`` (document
+properties) has its ``dcterms:created``, ``dcterms:modified``, and
+``cp:lastModifiedBy`` tag contents blanked in place.
+``calcChain.xml`` (e.g. ``xl/calcChain.xml``) is excluded entirely
+because Excel regenerates it on every save with unrelated content
+changes. Unreadable zip data falls back to hashing the raw bytes.
 """
 
 import hashlib
@@ -26,12 +38,9 @@ _UUID_RE = re.compile(
 )
 _UUID_PLACEHOLDER = '00000000-0000-0000-0000-000000000000'
 
-# OOXML members whose content carries save-time metadata rather than
-# document substance. ``core.xml`` is normalized in place (timestamps
-# blanked); the others are excluded from the hash entirely because they
-# regenerate with unrelated content changes.
-_OOXML_TIMESTAMPED_MEMBERS = ('docProps/core.xml',)
-_OOXML_EXCLUDED_MEMBERS = ('calcChain.xml',)
+# Matched by basename (see module docstring for the full policy).
+_OOXML_TIMESTAMPED_MEMBERS = {'core.xml'}
+_OOXML_EXCLUDED_MEMBERS = {'calcChain.xml'}
 
 _OOXML_TIMESTAMP_TAGS = (
     'dcterms:created', 'dcterms:modified', 'cp:lastModifiedBy',
@@ -42,6 +51,10 @@ _TEXT_EXTENSIONS = {
     '.html', '.htm', '.xml', '.txt', '.json', '.csv', '.svg', '.md',
     '.css', '.js',
 }
+
+# Globally registered normalizers, appended after each artifact's
+# extension-based defaults. Populated via register_normalizer().
+_GLOBAL_NORMALIZERS = []
 
 CERTIFIED = 'CERTIFIED'
 STALE = 'STALE'
@@ -71,14 +84,15 @@ def normalize_uuids(data):
 
 
 def normalize_ooxml(data):
-    """Hash the deterministic content of an Office (OOXML zip) document.
+    """Canonicalize an Office (OOXML zip) document to deterministic bytes.
 
-    Members are hashed in sorted order by name, so zip member ordering and
-    archive timestamps cannot affect the digest. Members listed in
-    ``_OOXML_EXCLUDED_MEMBERS`` are skipped; members listed in
+    Produces a canonical byte serialization: member names and contents in
+    sorted order, so zip member ordering and archive timestamps cannot
+    affect the digest. Members whose basename is in
+    ``_OOXML_EXCLUDED_MEMBERS`` are skipped; basenames in
     ``_OOXML_TIMESTAMPED_MEMBERS`` have their timestamp/last-modified-by
-    tags blanked before hashing. Returns the raw bytes unchanged if the
-    data is not a readable zip archive.
+    tags blanked before serialization. Returns the raw bytes unchanged if
+    the data is not a readable zip archive.
     """
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
@@ -86,18 +100,19 @@ def normalize_ooxml(data):
     except (zipfile.BadZipFile, OSError):
         return data
 
-    h = hashlib.sha256()
+    canonical = io.BytesIO()
     for name in sorted(names):
-        if name in _OOXML_EXCLUDED_MEMBERS:
+        basename = name.rsplit('/', 1)[-1]
+        if basename in _OOXML_EXCLUDED_MEMBERS:
             continue
         content = archive.read(name)
-        if name in _OOXML_TIMESTAMPED_MEMBERS:
+        if basename in _OOXML_TIMESTAMPED_MEMBERS:
             content = _blank_xml_tags(content, _OOXML_TIMESTAMP_TAGS)
-        h.update(name.encode('utf-8'))
-        h.update(b'\x00')
-        h.update(content)
-        h.update(b'\x00')
-    return h.hexdigest().encode('ascii')
+        canonical.write(name.encode('utf-8'))
+        canonical.write(b'\x00')
+        canonical.write(content)
+        canonical.write(b'\x00')
+    return canonical.getvalue()
 
 
 def _blank_xml_tags(content, tag_names):
@@ -113,19 +128,30 @@ def _blank_xml_tags(content, tag_names):
     return text.encode('utf-8')
 
 
+def register_normalizer(normalizer):
+    """Register a byte->byte normalizer applied to every artifact after
+    its extension-based defaults. For per-artifact pipelines, pass
+    ``normalizers`` to ``check_inspection_hash`` instead."""
+    _GLOBAL_NORMALIZERS.append(normalizer)
+
+
 def default_normalizers(path):
     """Return the default normalizer pipeline for an artifact path.
 
     OOXML documents get the document normalizer; known text formats get
-    UUID normalization; everything else is hashed raw. Pass an explicit
-    ``normalizers`` list to ``check_inspection_hash`` to override.
+    UUID normalization; everything else is hashed raw. Any normalizers
+    registered via ``register_normalizer`` are appended. Pass an explicit
+    ``normalizers`` list to ``check_inspection_hash`` to override
+    completely (registered normalizers are then not applied).
     """
     ext = Path(path).suffix.lower()
     if ext in _OOXML_EXTENSIONS:
-        return [normalize_ooxml]
-    if ext in _TEXT_EXTENSIONS:
-        return [normalize_uuids]
-    return []
+        pipeline = [normalize_ooxml]
+    elif ext in _TEXT_EXTENSIONS:
+        pipeline = [normalize_uuids]
+    else:
+        pipeline = []
+    return pipeline + list(_GLOBAL_NORMALIZERS)
 
 
 def normalized_digest(artifact_path, normalizers=None):
@@ -152,12 +178,19 @@ def sidecar_path(artifact_path):
     return artifact_path.with_suffix(artifact_path.suffix + '.sha256')
 
 
-def artifact_status(artifact_path, normalizers=None):
-    """CERTIFIED, STALE, or UNCERTIFIED for the given artifact."""
+def _committed_digest(artifact_path):
+    """The digest recorded in the artifact's sidecar, or None."""
     sidecar = sidecar_path(artifact_path)
     if not sidecar.exists():
+        return None
+    return sidecar.read_text().strip().split()[0]
+
+
+def artifact_status(artifact_path, normalizers=None):
+    """CERTIFIED, STALE, or UNCERTIFIED for the given artifact."""
+    committed = _committed_digest(artifact_path)
+    if committed is None:
         return UNCERTIFIED
-    committed = sidecar.read_text().strip().split()[0]
     current = normalized_digest(artifact_path, normalizers)
     return CERTIFIED if current == committed else STALE
 
@@ -202,39 +235,50 @@ def check_inspection_hash(artifact_path, normalizers=None, certify_hint=None):
     """
     artifact_path = Path(artifact_path)
     certify_cmd = certify_hint or 'the certify tool for this project'
-    sidecar = sidecar_path(artifact_path)
+    committed = _committed_digest(artifact_path)
     current = normalized_digest(artifact_path, normalizers)
 
-    if not sidecar.exists():
+    def _fail(headline, verb, verify):
         raise AssertionError(
-            "\nNo certification hash found for: %s\n"
-            "\n  Steps to certify:"
+            "\n%s: %s\n"
+            "\n  Steps to %s:"
             "\n    1. Open and review: %s"
-            "\n    2. Verify the output looks correct."
+            "\n    2. %s"
             "\n    3. Run: %s"
             "\n    4. Commit the resulting .sha256 file.\n"
-            % (artifact_path.name, artifact_path.resolve(), certify_cmd)
+            % (headline, artifact_path.name, verb,
+               artifact_path.resolve(), verify, certify_cmd)
         )
 
-    committed = sidecar.read_text().strip().split()[0]
+    if committed is None:
+        _fail(
+            'No certification hash found for',
+            'certify',
+            'Verify the output looks correct.',
+        )
     if current != committed:
-        raise AssertionError(
-            "\nArtifact has changed since last human certification: %s\n"
-            "\n  Steps to re-certify:"
-            "\n    1. Open and review: %s"
-            "\n    2. Verify the changes are intentional and look correct."
-            "\n    3. Run: %s"
-            "\n    4. Commit the updated .sha256 file.\n"
-            % (artifact_path.name, artifact_path.resolve(), certify_cmd)
+        _fail(
+            'Artifact has changed since last human certification',
+            're-certify',
+            'Verify the changes are intentional and look correct.',
         )
 
 
-def discover_artifacts(root, status_report_name='inspection_status.html'):
-    """All certifiable artifacts under ``root``, excluding sidecars and
-    the status dashboard itself."""
+DEFAULT_STATUS_REPORT_NAME = 'inspection_status.html'
+
+
+def discover_artifacts(root, pattern='*.html',
+                       status_report_name=DEFAULT_STATUS_REPORT_NAME):
+    """Certifiable artifacts matching ``pattern`` under ``root``.
+
+    Sidecars and the status dashboard itself are never included.
+    Defaults to ``*.html``, matching the convention that inspection
+    artifacts are HTML reports; pass a broader pattern (e.g. ``*.docx``)
+    for other artifact types.
+    """
     root = Path(root)
     return sorted(
-        p for p in root.iterdir()
+        p for p in root.glob(pattern)
         if p.is_file()
         and not p.name.endswith('.sha256')
         and p.name != status_report_name
@@ -339,11 +383,13 @@ def print_status(artifacts, certify_command):
         return
     print('\nInspection Artifact Review Status\n' + '=' * 36)
     needs_review = 0
-    icons = {CERTIFIED: 'OK', STALE: 'STALE', UNCERTIFIED: 'UNREVIEWED'}
-    for art in artifacts:
-        s = artifact_status(art)
-        print('  [%s]  %s' % (icons[s].ljust(11), art.name))
-        if s != CERTIFIED:
+    status_icons = {
+        CERTIFIED: 'OK', STALE: 'STALE', UNCERTIFIED: 'UNREVIEWED',
+    }
+    for artifact in artifacts:
+        status = artifact_status(artifact)
+        print('  [%s]  %s' % (status_icons[status].ljust(11), artifact.name))
+        if status != CERTIFIED:
             needs_review += 1
     print()
     if needs_review:
@@ -359,14 +405,16 @@ def certify(targets, normalizers=None):
         print('No artifacts to certify.')
         return
     print('Certifying inspection artifacts:')
+    certified_count = 0
     for path in targets:
         path = Path(path)
         if not path.exists():
             print('  SKIP (not found): %s' % path)
             continue
         certify_file(path, normalizers)
+        certified_count += 1
     print(
         '\nDone. %d artifact(s) certified.\n'
         'Commit the updated .sha256 files to record your approval.'
-        % len(targets)
+        % certified_count
     )

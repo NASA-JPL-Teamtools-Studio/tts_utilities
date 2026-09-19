@@ -15,13 +15,12 @@ import sys
 from pathlib import Path
 
 from tts_utilities.inspection import (
+    DEFAULT_STATUS_REPORT_NAME,
     certify,
     discover_artifacts,
     print_status,
     render_status_report,
 )
-
-STATUS_REPORT_NAME = 'inspection_status.html'
 
 
 def main(argv=None):
@@ -40,8 +39,9 @@ def main(argv=None):
         '--certify', nargs='*', default=None, metavar='PATH',
         help='Certify all artifacts (no args) or the listed artifact paths')
     parser.add_argument(
-        '--dashboard', action='store_true',
-        help='Write an HTML status dashboard into the artifact directory')
+        '--no-dashboard', action='store_true',
+        help='Do not write the HTML status dashboard (it is written by '
+             'default on every status run)')
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
@@ -49,7 +49,8 @@ def main(argv=None):
         print("Error: '%s' is not a directory" % root, file=sys.stderr)
         sys.exit(1)
 
-    artifacts = discover_artifacts(root, STATUS_REPORT_NAME)
+    artifacts = discover_artifacts(
+        root, status_report_name=DEFAULT_STATUS_REPORT_NAME)
     certify_cmd = (
         'python -m tts_utilities.cli.inspection_certify --root %s --certify'
         % root
@@ -61,9 +62,9 @@ def main(argv=None):
         return
 
     print_status(artifacts, certify_cmd)
-    if args.dashboard:
+    if not args.no_dashboard:
         report = render_status_report(artifacts, certify_cmd)
-        report_path = root / STATUS_REPORT_NAME
+        report_path = root / DEFAULT_STATUS_REPORT_NAME
         report_path.write_text(report, encoding='utf-8')
         print('\n  Dashboard written: %s\n' % report_path)
 
